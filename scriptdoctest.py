@@ -16,13 +16,13 @@ class ScriptDocTestParser(doctest.DocTestParser):
     _EXAMPLE_RE = re.compile(r'''
         # Source consists of a PS1 line followed by zero or more PS2 lines.
         (?P<source>
-            (?:^(?P<indent> [ ]*) >>>    .*)    # PS1 line
-            (?:\n           [ ]*  \.\.\. .*)*)  # PS2 lines
+            (?:^(?P<indent> [ ]*) \$[ ] .*)    # PS1 line
+            (?:\n           [ ]*  > [ ] .*)*)  # PS2 lines
         \n?
         # Want consists of any non-blank lines that do not start with PS1.
-        (?P<want> (?:(?![ ]*$)    # Not a blank line
-                     (?![ ]*>>>)  # Not a line starting with PS1
-                     .+$\n?       # But any other line
+        (?P<want> (?:(?![ ]*$)     # Not a blank line
+                     (?![ ]*\$[ ]) # Not a line starting with PS1
+                     .+$\n?        # But any other line
                   )*)
         ''', re.MULTILINE | re.VERBOSE)
 
@@ -52,45 +52,6 @@ class ScriptDocTestParser(doctest.DocTestParser):
     # or contains a single comment.
     _IS_BLANK_OR_COMMENT = re.compile(r'^[ ]*(#.*)?$').match
 
-    def parse(self, string, name='<string>'):
-        """
-        Divide the given string into examples and intervening text,
-        and return them as a list of alternating Examples and strings.
-        Line numbers for the Examples are 0-based.  The optional
-        argument `name` is a name identifying this string, and is only
-        used for error messages.
-        """
-        string = string.expandtabs()
-        # If all lines begin with the same indentation, then strip it.
-        min_indent = self._min_indent(string)
-        if min_indent > 0:
-            string = '\n'.join([l[min_indent:] for l in string.split('\n')])
-
-        output = []
-        charno, lineno = 0, 0
-        # Find all doctest examples in the string:
-        for m in self._EXAMPLE_RE.finditer(string):
-            # Add the pre-example text to `output`.
-            output.append(string[charno:m.start()])
-            # Update lineno (lines before this example)
-            lineno += string.count('\n', charno, m.start())
-            # Extract info from the regexp match.
-            (source, options, want, exc_msg) = \
-                     self._parse_example(m, name, lineno)
-            # Create an Example, and add it to the list.
-            if not self._IS_BLANK_OR_COMMENT(source):
-                output.append( Example(source, want, exc_msg,
-                                    lineno=lineno,
-                                    indent=min_indent+len(m.group('indent')),
-                                    options=options) )
-            # Update lineno (lines inside this example)
-            lineno += string.count('\n', m.start(), m.end())
-            # Update charno.
-            charno = m.end()
-        # Add any remaining post-example text to `output`.
-        output.append(string[charno:])
-        return output
-
     def get_doctest(self, string, globs, name, filename, lineno):
         """
         Extract all doctest examples from the given string, and
@@ -102,20 +63,6 @@ class ScriptDocTestParser(doctest.DocTestParser):
         """
         return DocTest(self.get_examples(string, name), globs,
                        name, filename, lineno, string)
-
-    def get_examples(self, string, name='<string>'):
-        """
-        Extract all doctest examples from the given string, and return
-        them as a list of `Example` objects.  Line numbers are
-        0-based, because it's most common in doctests that nothing
-        interesting appears on the same line as opening triple-quote,
-        and so the first interesting line is called \"line 1\" then.
-
-        The optional argument `name` is a name identifying this
-        string, and is only used for error messages.
-        """
-        return [x for x in self.parse(string, name)
-                if isinstance(x, Example)]
 
     def _parse_example(self, m, name, lineno):
         """
@@ -161,78 +108,16 @@ class ScriptDocTestParser(doctest.DocTestParser):
 
         return source, options, want, exc_msg
 
-    # This regular expression looks for option directives in the
-    # source code of an example.  Option directives are comments
-    # starting with "doctest:".  Warning: this may give false
-    # positives for string-literals that contain the string
-    # "#doctest:".  Eliminating these false positives would require
-    # actually parsing the string; but we limit them by ignoring any
-    # line containing "#doctest:" that is *followed* by a quote mark.
-    _OPTION_DIRECTIVE_RE = re.compile(r'#\s*doctest:\s*([^\n\'"]*)$',
-                                      re.MULTILINE)
-
-    def _find_options(self, source, name, lineno):
-        """
-        Return a dictionary containing option overrides extracted from
-        option directives in the given source string.
-
-        `name` is the string's name, and `lineno` is the line number
-        where the example starts; both are used for error messages.
-        """
-        options = {}
-        # (note: with the current regexp, this will match at most once:)
-        for m in self._OPTION_DIRECTIVE_RE.finditer(source):
-            option_strings = m.group(1).replace(',', ' ').split()
-            for option in option_strings:
-                if (option[0] not in '+-' or
-                    option[1:] not in OPTIONFLAGS_BY_NAME):
-                    raise ValueError('line %r of the doctest for %s '
-                                     'has an invalid option: %r' %
-                                     (lineno+1, name, option))
-                flag = OPTIONFLAGS_BY_NAME[option[1:]]
-                options[flag] = (option[0] == '+')
-        if options and self._IS_BLANK_OR_COMMENT(source):
-            raise ValueError('line %r of the doctest for %s has an option '
-                             'directive on a line with no example: %r' %
-                             (lineno, name, source))
-        return options
-
-    # This regular expression finds the indentation of every non-blank
-    # line in a string.
-    _INDENT_RE = re.compile('^([ ]*)(?=\S)', re.MULTILINE)
-
-    def _min_indent(self, s):
-        "Return the minimum indentation of any non-blank line in `s`"
-        indents = [len(indent) for indent in self._INDENT_RE.findall(s)]
-        if len(indents) > 0:
-            return min(indents)
-        else:
-            return 0
-
     def _check_prompt_blank(self, lines, indent, name, lineno):
-        """
-        Given the lines of a source string (including prompts and
-        leading indentation), check to make sure that every prompt is
-        followed by a space character.  If any line is not followed by
-        a space character, then raise ValueError.
-        """
-        for i, line in enumerate(lines):
-            if len(line) >= indent+4 and line[indent+3] != ' ':
-                raise ValueError('line %r of the docstring for %s '
-                                 'lacks blank after %s: %r' %
-                                 (lineno+i+1, name,
-                                  line[indent:indent+3], line))
+        """Do nothing.
 
-    def _check_prefix(self, lines, prefix, name, lineno):
+        In ScriptDocTest, we ensure that every prompt is followed by a
+        space character in the regular expression looking for prompts,
+        because otherwise we might get too many false positives. So we
+        don't need to check that again.
+
         """
-        Check that every line in the given list starts with the given
-        prefix; if any line does not, then raise a ValueError.
-        """
-        for i, line in enumerate(lines):
-            if line and not line.startswith(prefix):
-                raise ValueError('line %r of the docstring for %s has '
-                                 'inconsistent leading whitespace: %r' %
-                                 (lineno+i+1, name, line))
+        pass
 
 
 ######################################################################
@@ -240,11 +125,10 @@ class ScriptDocTestParser(doctest.DocTestParser):
 ######################################################################
 
 class ScriptDocTestRunner(doctest.DocTestRunner):
-    """
-    A class used to run DocTest test cases, and accumulate statistics.
-    The `run` method is used to process a single DocTest case.  It
-    returns a tuple `(f, t)`, where `t` is the number of test cases
-    tried, and `f` is the number of test cases that failed.
+    """A class used to run DocTest test cases for scripts, and accumulate
+    statistics.  The `run` method is used to process a single DocTest
+    case.  It returns a tuple `(f, t)`, where `t` is the number of
+    test cases tried, and `f` is the number of test cases that failed.
 
         >>> tests = DocTestFinder().find(_TestClass)
         >>> runner = DocTestRunner(verbose=False)
@@ -294,6 +178,7 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
     can be also customized by subclassing DocTestRunner, and
     overriding the methods `report_start`, `report_success`,
     `report_unexpected_exception`, and `report_failure`.
+
     """
     # This divider string is used to separate failure messages, and to
     # separate sections of the summary.
