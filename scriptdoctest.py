@@ -1,4 +1,14 @@
+import os
+import sys
+import re
 import doctest
+import tempfile
+from doctest import (_load_testfile, OutputChecker, _SpoofOut,
+                     _indent, _exception_traceback,
+                     _extract_future_flags, _OutputRedirectingPdb,
+                     linecache, REPORT_ONLY_FIRST_FAILURE, SKIP, TestResults, master, FAIL_FAST)
+import pdb
+import scripttest
 
 ######################################################################
 ## 3. ScriptDocTest Parser
@@ -61,8 +71,8 @@ class ScriptDocTestParser(doctest.DocTestParser):
         the new `DocTest` object.  See the documentation for `DocTest`
         for more information.
         """
-        return DocTest(self.get_examples(string, name), globs,
-                       name, filename, lineno, string)
+        return doctest.DocTest(self.get_examples(string, name), globs,
+                               name, filename, lineno, string)
 
     def _parse_example(self, m, name, lineno):
         """
@@ -75,15 +85,15 @@ class ScriptDocTestParser(doctest.DocTestParser):
         `name` is the string's name, and `lineno` is the line number
         where the example starts; both are used for error messages.
         """
+        
         # Get the example's indentation level.
         indent = len(m.group('indent'))
 
         # Divide source into lines; check that they're properly
         # indented; and then strip their indentation & prompts.
         source_lines = m.group('source').split('\n')
-        self._check_prompt_blank(source_lines, indent, name, lineno)
-        self._check_prefix(source_lines[1:], ' '*indent + '.', name, lineno)
-        source = '\n'.join([sl[indent+4:] for sl in source_lines])
+        self._check_prefix(source_lines[1:], ' '*indent + '> ', name, lineno)
+        source = '\n'.join([sl[indent+2:] for sl in source_lines])
 
         # Divide want into lines; check that it's properly indented; and
         # then strip the indentation.  Spaces before the last newline should
@@ -96,12 +106,7 @@ class ScriptDocTestParser(doctest.DocTestParser):
                            lineno + len(source_lines))
         want = '\n'.join([wl[indent:] for wl in want_lines])
 
-        # If `want` contains a traceback message, then extract it.
-        m = self._EXCEPTION_RE.match(want)
-        if m:
-            exc_msg = m.group('msg')
-        else:
-            exc_msg = None
+        exc_msg = None
 
         # Extract options from the source.
         options = self._find_options(source, name, lineno)
@@ -216,37 +221,11 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
         # Create a fake output target for capturing doctest output.
         self._fakeout = _SpoofOut()
 
+        self.directory = tempfile.mkdtemp(prefix="scripttest")
+
     #/////////////////////////////////////////////////////////////////
     # Reporting methods
     #/////////////////////////////////////////////////////////////////
-
-    def report_start(self, out, test, example):
-        """
-        Report that the test runner is about to process the given
-        example.  (Only displays a message if verbose=True)
-        """
-        if self._verbose:
-            if example.want:
-                out('Trying:\n' + _indent(example.source) +
-                    'Expecting:\n' + _indent(example.want))
-            else:
-                out('Trying:\n' + _indent(example.source) +
-                    'Expecting nothing\n')
-
-    def report_success(self, out, test, example, got):
-        """
-        Report that the given example ran successfully.  (Only
-        displays a message if verbose=True)
-        """
-        if self._verbose:
-            out("ok\n")
-
-    def report_failure(self, out, test, example, got):
-        """
-        Report that the given example failed.
-        """
-        out(self._failure_header(test, example) +
-            self._checker.output_difference(example, got, self.optionflags))
 
     def report_unexpected_exception(self, out, test, example, exc_info):
         """
@@ -270,6 +249,15 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
         source = example.source
         out.append(_indent(source))
         return '\n'.join(out)
+
+    # util
+    def __patched_linecache_getlines(self, filename, module_globals=None):
+        m = self.__LINECACHE_FILENAME_RE.match(filename)
+        if m and m.group('name') == self.test.name:
+            example = self.test.examples[int(m.group('examplenum'))]
+            return example.source.splitlines(keepends=True)
+        else:
+            return self.save_linecache_getlines(filename, module_globals)
 
     #/////////////////////////////////////////////////////////////////
     # DocTest Running
@@ -295,6 +283,8 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
         SUCCESS, FAILURE, BOOM = range(3) # `outcome` state
 
         check = self._checker.check_output
+
+        testenvironment = scripttest.TestFileEnvironment()
 
         # Process each example.
         for examplenum, example in enumerate(test.examples):
@@ -322,57 +312,37 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
             if not quiet:
                 self.report_start(out, test, example)
 
-            # Use a special filename for compile(), so we can retrieve
-            # the source code during interactive debugging (see
-            # __patched_linecache_getlines).
-            filename = '<doctest %s[%d]>' % (test.name, examplenum)
-
             # Run the example in the given context (globs), and record
             # any exception that gets raised.  (But don't intercept
             # keyboard interrupts.)
+
+            # Don't blink!  This is where the user's code gets run.
             try:
-                # Don't blink!  This is where the user's code gets run.
-                exec(compile(example.source, filename, "single",
-                             compileflags, 1), test.globs)
+                # testenvironment does not run in shell mode. It's
+                # better explicit than implicit anyway.
+                output = testenvironment.run("/bin/sh", "-c", example.source,
+                                             expect_error=True,
+                                             err_to_out=True)
+            
                 self.debugger.set_continue() # ==== Example Finished ====
-                exception = None
+                exception = output.returncode
             except KeyboardInterrupt:
                 raise
-            except:
-                exception = sys.exc_info()
-                self.debugger.set_continue() # ==== Example Finished ====
 
-            got = self._fakeout.getvalue()  # the actual output
+            got = output.stdout  # the actual output
             self._fakeout.truncate(0)
-            outcome = FAILURE   # guilty until proved innocent or insane
+            outcome = FAILURE   # guilty until proven innocent or insane
 
             # If the example executed without raising any exceptions,
             # verify its output.
-            if exception is None:
+            if exception == 0:
                 if check(example.want, got, self.optionflags):
                     outcome = SUCCESS
 
             # The example raised an exception:  check if it was expected.
             else:
-                exc_msg = traceback.format_exception_only(*exception[:2])[-1]
-                if not quiet:
-                    got += _exception_traceback(exception)
-
-                # If `example.exc_msg` is None, then we weren't expecting
-                # an exception.
-                if example.exc_msg is None:
-                    outcome = BOOM
-
-                # We expected an exception:  see whether it matches.
-                elif check(example.exc_msg, exc_msg, self.optionflags):
+                if check(example.want, got, self.optionflags):
                     outcome = SUCCESS
-
-                # Another chance if they didn't care about the detail.
-                elif self.optionflags & IGNORE_EXCEPTION_DETAIL:
-                    if check(_strip_exception_details(example.exc_msg),
-                             _strip_exception_details(exc_msg),
-                             self.optionflags):
-                        outcome = SUCCESS
 
             # Report the outcome.
             if outcome is SUCCESS:
@@ -410,16 +380,6 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
         self.failures += f
         self.tries += t
 
-    __LINECACHE_FILENAME_RE = re.compile(r'<doctest '
-                                         r'(?P<name>.+)'
-                                         r'\[(?P<examplenum>\d+)\]>$')
-    def __patched_linecache_getlines(self, filename, module_globals=None):
-        m = self.__LINECACHE_FILENAME_RE.match(filename)
-        if m and m.group('name') == self.test.name:
-            example = self.test.examples[int(m.group('examplenum'))]
-            return example.source.splitlines(keepends=True)
-        else:
-            return self.save_linecache_getlines(filename, module_globals)
 
     def run(self, test, compileflags=None, out=None, clear_globs=True):
         """
@@ -491,75 +451,123 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
                 import builtins
                 builtins._ = None
 
-    #/////////////////////////////////////////////////////////////////
-    # Summarization
-    #/////////////////////////////////////////////////////////////////
-    def summarize(self, verbose=None):
-        """
-        Print a summary of all the test cases that have been run by
-        this DocTestRunner, and return a tuple `(f, t)`, where `f` is
-        the total number of failed examples, and `t` is the total
-        number of tried examples.
 
-        The optional `verbose` argument controls how detailed the
-        summary is.  If the verbosity is not specified, then the
-        DocTestRunner's verbosity is used.
-        """
-        if verbose is None:
-            verbose = self._verbose
-        notests = []
-        passed = []
-        failed = []
-        totalt = totalf = 0
-        for x in self._name2ft.items():
-            name, (f, t) = x
-            assert f <= t
-            totalt += t
-            totalf += f
-            if t == 0:
-                notests.append(name)
-            elif f == 0:
-                passed.append( (name, t) )
-            else:
-                failed.append(x)
-        if verbose:
-            if notests:
-                print(len(notests), "items had no tests:")
-                notests.sort()
-                for thing in notests:
-                    print("   ", thing)
-            if passed:
-                print(len(passed), "items passed all tests:")
-                passed.sort()
-                for thing, count in passed:
-                    print(" %3d tests in %s" % (count, thing))
-        if failed:
-            print(self.DIVIDER)
-            print(len(failed), "items had failures:")
-            failed.sort()
-            for thing, (f, t) in failed:
-                print(" %3d of %3d in %s" % (f, t, thing))
-        if verbose:
-            print(totalt, "tests in", len(self._name2ft), "items.")
-            print(totalt - totalf, "passed and", totalf, "failed.")
-        if totalf:
-            print("***Test Failed***", totalf, "failures.")
-        elif verbose:
-            print("Test passed.")
-        return TestResults(totalf, totalt)
+def testfile(filename, module_relative=True, name=None, package=None,
+             globs=None, verbose=None, report=True, optionflags=0,
+             extraglobs=None, raise_on_error=False, parser=ScriptDocTestParser(),
+             encoding=None):
+    """
+    Test examples in the given file.  Return (#failures, #tests).
 
-    #/////////////////////////////////////////////////////////////////
-    # Backward compatibility cruft to maintain doctest.master.
-    #/////////////////////////////////////////////////////////////////
-    def merge(self, other):
-        d = self._name2ft
-        for name, (f, t) in other._name2ft.items():
-            if name in d:
-                # Don't print here by default, since doing
-                #     so breaks some of the buildbots
-                #print("*** DocTestRunner.merge: '" + name + "' in both" \
-                #    " testers; summing outcomes.")
-                f2, t2 = d[name]
-                f = f + f2
-                t = t + t2
-            d[name] = f, t
+    Optional keyword arg "module_relative" specifies how filenames
+    should be interpreted:
+
+      - If "module_relative" is True (the default), then "filename"
+         specifies a module-relative path.  By default, this path is
+         relative to the calling module's directory; but if the
+         "package" argument is specified, then it is relative to that
+         package.  To ensure os-independence, "filename" should use
+         "/" characters to separate path segments, and should not
+         be an absolute path (i.e., it may not begin with "/").
+
+      - If "module_relative" is False, then "filename" specifies an
+        os-specific path.  The path may be absolute or relative (to
+        the current working directory).
+
+    Optional keyword arg "name" gives the name of the test; by default
+    use the file's basename.
+
+    Optional keyword argument "package" is a Python package or the
+    name of a Python package whose directory should be used as the
+    base directory for a module relative filename.  If no package is
+    specified, then the calling module's directory is used as the base
+    directory for module relative filenames.  It is an error to
+    specify "package" if "module_relative" is False.
+
+    Optional keyword arg "globs" gives a dict to be used as the globals
+    when executing examples; by default, use {}.  A copy of this dict
+    is actually used for each docstring, so that each docstring's
+    examples start with a clean slate.
+
+    Optional keyword arg "extraglobs" gives a dictionary that should be
+    merged into the globals that are used to execute examples.  By
+    default, no extra globals are used.
+
+    Optional keyword arg "verbose" prints lots of stuff if true, prints
+    only failures if false; by default, it's true iff "-v" is in sys.argv.
+
+    Optional keyword arg "report" prints a summary at the end when true,
+    else prints nothing at the end.  In verbose mode, the summary is
+    detailed, else very brief (in fact, empty if all tests passed).
+
+    Optional keyword arg "optionflags" or's together module constants,
+    and defaults to 0.  Possible values (see the docs for details):
+
+        DONT_ACCEPT_TRUE_FOR_1
+        DONT_ACCEPT_BLANKLINE
+        NORMALIZE_WHITESPACE
+        ELLIPSIS
+        SKIP
+        IGNORE_EXCEPTION_DETAIL
+        REPORT_UDIFF
+        REPORT_CDIFF
+        REPORT_NDIFF
+        REPORT_ONLY_FIRST_FAILURE
+
+    Optional keyword arg "raise_on_error" raises an exception on the
+    first unexpected exception or failure. This allows failures to be
+    post-mortem debugged.
+
+    Optional keyword arg "parser" specifies a DocTestParser (or
+    subclass) that should be used to extract tests from the files.
+
+    Optional keyword arg "encoding" specifies an encoding that should
+    be used to convert the file to unicode.
+
+    Advanced tomfoolery:  testmod runs methods of a local instance of
+    class doctest.Tester, then merges the results into (or creates)
+    global Tester instance doctest.master.  Methods of doctest.master
+    can be called directly too, if you want to do something unusual.
+    Passing report=0 to testmod is especially useful then, to delay
+    displaying a summary.  Invoke doctest.master.summarize(verbose)
+    when you're done fiddling.
+    """
+    global master
+
+    if package and not module_relative:
+        raise ValueError("Package may only be specified for module-"
+                         "relative paths.")
+
+    # Relativize the path
+    text, filename = _load_testfile(filename, package, module_relative,
+                                    encoding or "utf-8")
+
+    # If no name was given, then use the file's name.
+    if name is None:
+        name = os.path.basename(filename)
+
+    # Assemble the globals.
+    if globs is None:
+        globs = {}
+    else:
+        globs = globs.copy()
+    if extraglobs is not None:
+        globs.update(extraglobs)
+    if '__name__' not in globs:
+        globs['__name__'] = '__main__'
+
+    runner = ScriptDocTestRunner(verbose=verbose, optionflags=optionflags)
+
+    # Read the file, convert it to a test, and run it.
+    test = parser.get_doctest(text, globs, name, filename, 0)
+    runner.run(test)
+
+    if report:
+        runner.summarize()
+
+    if master is None:
+        master = runner
+    else:
+        master.merge(runner)
+
+    return TestResults(runner.failures, runner.tries)
