@@ -5,10 +5,25 @@ import doctest
 import tempfile
 from doctest import (_load_testfile, OutputChecker, _SpoofOut,
                      _indent, _exception_traceback,
-                     _extract_future_flags, _OutputRedirectingPdb,
-                     linecache, REPORT_ONLY_FIRST_FAILURE, SKIP, TestResults, master, FAIL_FAST)
+                     register_optionflag, _extract_future_flags,
+                     _OutputRedirectingPdb, Example, linecache,
+                     REPORT_ONLY_FIRST_FAILURE, SKIP, TestResults,
+                     master, FAIL_FAST)
+
+
+try:
+    from shlex import quote as sh_quote, split as sh_split
+except ImportError:
+    def sh_quote(string):
+        return string
+    def sh_split(string):
+        return split(string)
+    
+
 import pdb
 import scripttest
+
+CREATE_FILE_BEFORE_TEST = register_optionflag("CREATE_FILE_BEFORE_TEST")
 
 ######################################################################
 ## 3. ScriptDocTest Parser
@@ -23,10 +38,9 @@ class ScriptDocTestParser(doctest.DocTestParser):
     # (including leading indentation and prompts); `indent` is the
     # indentation of the first (PS1) line of the source code; and
     # `want` is the expected output (including leading indentation).
-    _EXAMPLE_RE = re.compile(r'''
+    _EXAMPLE_RE = re.compile(r'''(
         # Source consists of ::, an empty line, and then a PS1 line followed by zero or more PS2 lines.
-        ::[ ]*\n
-        [ ]*\n
+        ::[ \n]*
         (?P<source>
             (?:^(?P<indent> [ ]*) \$[ ] .*)    # PS1 line
             (?:\n           [ ]*  > [ ] .*)*)  # PS2 lines
@@ -37,15 +51,16 @@ class ScriptDocTestParser(doctest.DocTestParser):
                      .+$\n?        # But any other line
                   )*)
 
-        |
+        )|(
         # Alternatively, we also need to consider file content examples.
-        (?P<preindent> [ ]*) ::
-        ^[ ]*\n
-        (?P<want>
-            (?P<indent> (?P=preindent) [ ]+) .*\n
-            ((          (?P=preindent) [ ]+) .*\n)*)
+        ^(?P<preindent> [ ]*) ::\n
+        (?P<options>(
+            ([ ]*\n)|
+            (?P=preindent)[#] .*\n)*)
+        (?P<content>
+            ((?P<fullindent> (?P=preindent)[ ]+).*\n)*)
         (?P=preindent) ---? [ ]* (?P<filename> .*)$
-        ''', re.MULTILINE | re.VERBOSE)
+        )''', re.MULTILINE | re.VERBOSE)
 
     # A regular expression for handling `want` strings that contain
     # expected exceptions.  It divides `want` into three pieces:
@@ -68,10 +83,6 @@ class ScriptDocTestParser(doctest.DocTestParser):
         (?P<stack> .*?)      # don't blink: absorb stuff until...
         ^ (?P<msg> \w+ .*)   #     a line *starts* with alphanum.
         """, re.VERBOSE | re.MULTILINE | re.DOTALL)
-
-    # A callable returning a true value iff its argument is a blank line
-    # or contains a single comment.
-    _IS_BLANK_OR_COMMENT = re.compile(r'^[ ]*(#.*)?$').match
 
     def get_doctest(self, string, globs, name, filename, lineno):
         """
@@ -96,33 +107,103 @@ class ScriptDocTestParser(doctest.DocTestParser):
         `name` is the string's name, and `lineno` is the line number
         where the example starts; both are used for error messages.
         """
-        
-        # Get the example's indentation level.
-        indent = len(m.group('indent'))
 
-        # Divide source into lines; check that they're properly
-        # indented; and then strip their indentation & prompts.
-        source_lines = m.group('source').split('\n')
-        self._check_prefix(source_lines[1:], ' '*indent + '> ', name, lineno)
-        source = '\n'.join([sl[indent+2:] for sl in source_lines])
+        # The regex matches both code examples and file
+        # constructions. Code examples are indented by `indent`.
+        if m.group('indent'):
+            # Get the example's indentation level.
+            indent = len(m.group('indent'))
 
-        # Divide want into lines; check that it's properly indented; and
-        # then strip the indentation.  Spaces before the last newline should
-        # be preserved, so plain rstrip() isn't good enough.
-        want = m.group('want')
-        want_lines = want.split('\n')
-        if len(want_lines) > 1 and re.match(r' *$', want_lines[-1]):
-            del want_lines[-1]  # forget final newline & spaces after it
-        self._check_prefix(want_lines, ' '*indent, name,
-                           lineno + len(source_lines))
-        want = '\n'.join([wl[indent:] for wl in want_lines])
+            # Divide source into lines; check that they're properly
+            # indented; and then strip their indentation & prompts.
+            source_lines = m.group('source').split('\n')
+            self._check_prefix(source_lines[1:], ' '*indent + '> ', name, lineno)
+            source = '\n'.join([sl[indent+2:] for sl in source_lines])
 
-        exc_msg = None
+            if self._IS_BLANK_OR_COMMENT(source):
+                return None
 
-        # Extract options from the source.
-        options = self._find_options(source, name, lineno)
+            # Divide want into lines; check that it's properly indented; and
+            # then strip the indentation.  Spaces before the last newline should
+            # be preserved, so plain rstrip() isn't good enough.
+            want = m.group('want')
+            want_lines = want.split('\n')
+            if len(want_lines) > 1 and re.match(r' *$', want_lines[-1]):
+                del want_lines[-1]  # forget final newline & spaces after it
+            self._check_prefix(want_lines, ' '*indent, name,
+                            lineno + len(source_lines))
+            want = '\n'.join([wl[indent:] for wl in want_lines])
 
-        return source, options, want, exc_msg
+            exc_msg = None
+
+            # Extract options from the source.
+            options = self._find_options(source, name, lineno)
+
+            return Example(source, want, exc_msg,
+                           lineno=lineno,
+                           indent=indent,
+                           options=options)
+
+        # File constructions, on the other hand, don't match that
+        # branch of the regular expression. Instead, they are have two
+        # other indentation levels, but `preindent` is only used to
+        # find the corresponding file name after it.
+        elif m.group('preindent'):
+            indent = len(m.group('fullindent'))
+
+            # Divide file into lines; check that they're properly
+            # indented; and then strip their indentation.
+            file_lines = m.group('content').split('\n')
+            self._check_prefix(file_lines, ' '*indent, name, lineno)
+            file_content = '\n'.join([fl[indent:] for fl in file_lines])
+
+            # The file name is just that, stripped.
+            filename = m.group("filename")
+
+            options = self._find_options(m.group('options'), name, lineno)
+            options[CREATE_FILE_BEFORE_TEST] = True
+            
+            return Example("cat {:s}".format(sh_quote(filename)),
+                           file_content,
+                           None,
+                           lineno=lineno,
+                           indent=indent,
+                           options=options)
+
+    def parse(self, string, name='<string>'):
+        """
+        Divide the given string into examples and intervening text,
+        and return them as a list of alternating Examples and strings.
+        Line numbers for the Examples are 0-based.  The optional
+        argument `name` is a name identifying this string, and is only
+        used for error messages.
+        """
+        string = string.expandtabs()
+        # If all lines begin with the same indentation, then strip it.
+        min_indent = self._min_indent(string)
+        if min_indent > 0:
+            string = '\n'.join([l[min_indent:] for l in string.split('\n')])
+
+        output = []
+        charno, lineno = 0, 0
+        # Find all doctest examples in the string:
+        for m in self._EXAMPLE_RE.finditer(string):
+            # Add the pre-example text to `output`.
+            output.append(string[charno:m.start()])
+            # Update lineno (lines before this example)
+            lineno += string.count('\n', charno, m.start())
+            # Extract info from the regexp match and create an Example
+            example = self._parse_example(m, name, lineno)
+            # If it's actually an example, and not None, add it to the list.
+            if example:
+                output.append(example)
+            # Update lineno (lines inside this example)
+            lineno += string.count('\n', m.start(), m.end())
+            # Update charno.
+            charno = m.end()
+        # Add any remaining post-example text to `output`.
+        output.append(string[charno:])
+        return output
 
     def _check_prompt_blank(self, lines, indent, name, lineno):
         """Do nothing.
@@ -327,6 +408,23 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
             # any exception that gets raised.  (But don't intercept
             # keyboard interrupts.)
 
+            if self.optionflags & CREATE_FILE_BEFORE_TEST:
+                split = sh_split(example.source)
+                if split[0] == "cat" and len(split) == 2:
+                    filename = split[1]
+                    with open(os.path.join(testenvironment.cwd, filename), "w") as file_to_write:
+                        file_to_write.write(example.want)
+                elif split[0] == "cat" and len(split) >= 3 and split[2].startswith("#"):
+                    # Okay, you  may have comments. But this may change.
+                    filename = split[1]
+                    with open(os.path.join(testenvironment.cwd, filename), "w") as file_to_write:
+                        file_to_write.write(example.want)
+                else:
+                    raise ValueError(
+                        "Example requested file creation, "
+                        "which works only if the command is of the form "
+                        "`$ cat 'literal_filename'`", example.source)
+                
             # Don't blink!  This is where the user's code gets run.
             try:
                 # testenvironment does not run in shell mode. It's
