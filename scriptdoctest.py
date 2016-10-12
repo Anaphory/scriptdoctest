@@ -24,7 +24,9 @@ class ScriptDocTestParser(doctest.DocTestParser):
     # indentation of the first (PS1) line of the source code; and
     # `want` is the expected output (including leading indentation).
     _EXAMPLE_RE = re.compile(r'''
-        # Source consists of a PS1 line followed by zero or more PS2 lines.
+        # Source consists of ::, an empty line, and then a PS1 line followed by zero or more PS2 lines.
+        ::[ ]*\n
+        [ ]*\n
         (?P<source>
             (?:^(?P<indent> [ ]*) \$[ ] .*)    # PS1 line
             (?:\n           [ ]*  > [ ] .*)*)  # PS2 lines
@@ -34,6 +36,15 @@ class ScriptDocTestParser(doctest.DocTestParser):
                      (?![ ]*\$[ ]) # Not a line starting with PS1
                      .+$\n?        # But any other line
                   )*)
+
+        |
+        # Alternatively, we also need to consider file content examples.
+        (?P<preindent> [ ]*) ::
+        ^[ ]*\n
+        (?P<want>
+            (?P<indent> (?P=preindent) [ ]+) .*\n
+            ((          (?P=preindent) [ ]+) .*\n)*)
+        (?P=preindent) ---? [ ]* (?P<filename> .*)$
         ''', re.MULTILINE | re.VERBOSE)
 
     # A regular expression for handling `want` strings that contain
