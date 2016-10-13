@@ -24,6 +24,7 @@ import pdb
 import scripttest
 
 CREATE_FILE_BEFORE_TEST = register_optionflag("CREATE_FILE_BEFORE_TEST")
+CHANGE_DIRECTORY = register_optionflag("CHANGE_DIRECTORY")
 
 ######################################################################
 ## 3. ScriptDocTest Parser
@@ -39,18 +40,16 @@ class ScriptDocTestParser(doctest.DocTestParser):
     # indentation of the first (PS1) line of the source code; and
     # `want` is the expected output (including leading indentation).
     _EXAMPLE_RE = re.compile(r'''(
-        # Source consists of ::, an empty line, and then a PS1 line followed by zero or more PS2 lines.
+        # Source consists of ::, an empty line, and then a PS1 line
+        # followed by indented or blank lines. Splitting out
+        # separate commands and their sources and wants is an issue
+        # for the single-example parser.
         ::[ \n]*
-        (?P<source>
-            (?:^(?P<indent> [ ]*) \$[ ] .*)    # PS1 line
-            (?:\n           [ ]*  > [ ] .*)*)  # PS2 lines
+        (?P<example>
+            (?:^(?P<indent> [ ]*) \$[ ] .*\n)  # PS1 line
+            (?:((?P=indent)       .*      \n)|
+               ([ ]*                      \n))*)
         \n?
-        # Want consists of any non-blank lines that do not start with PS1.
-        (?P<want> (?:(?![ ]*$)     # Not a blank line
-                     (?![ ]*\$[ ]) # Not a line starting with PS1
-                     .+$\n?        # But any other line
-                  )*)
-
         )|(
         # Alternatively, we also need to consider file content examples.
         ^(?P<preindent> [ ]*) ::\n
@@ -116,34 +115,47 @@ class ScriptDocTestParser(doctest.DocTestParser):
 
             # Divide source into lines; check that they're properly
             # indented; and then strip their indentation & prompts.
-            source_lines = m.group('source').split('\n')
-            self._check_prefix(source_lines[1:], ' '*indent + '> ', name, lineno)
-            source = '\n'.join([sl[indent+2:] for sl in source_lines])
+            lines = m.group('example').split('\n')
+            
+            source = ""
+            want = []
+            example_lineno = 0
+            # Parse line by line into separate examples
+            for l, line in enumerate(lines):
+                if not line.strip():
+                    line = ""
+                else:
+                    line = line[4:]
+                if line.startswith("$ "):
+                    if self._IS_BLANK_OR_COMMENT(source):
+                        pass
+                    else:
+                        # Extract options from the source.
+                        options = self._find_options(
+                            source, name, lineno)
+                        yield Example(source, '\n'.join(want), "",
+                                      lineno=lineno+example_lineno,
+                                      indent=indent,
+                                      options=options)       
+                    source = line[2:]
+                    want = []
+                    example_lineno = l
+                elif line.startswith("> "):
+                    if want:
+                        want.append(line)
+                    else:
+                        source = '\n'.join(source, line[2:])
+                else:
+                    want.append(line)
 
-            if self._IS_BLANK_OR_COMMENT(source):
-                return None
-
-            # Divide want into lines; check that it's properly indented; and
-            # then strip the indentation.  Spaces before the last newline should
-            # be preserved, so plain rstrip() isn't good enough.
-            want = m.group('want')
-            want_lines = want.split('\n')
-            if len(want_lines) > 1 and re.match(r' *$', want_lines[-1]):
-                del want_lines[-1]  # forget final newline & spaces after it
-            self._check_prefix(want_lines, ' '*indent, name,
-                            lineno + len(source_lines))
-            want = '\n'.join([wl[indent:] for wl in want_lines])
-
-            exc_msg = None
-
+            # Construct the last example.
             # Extract options from the source.
-            options = self._find_options(source, name, lineno)
-
-            return Example(source, want, exc_msg,
-                           lineno=lineno,
-                           indent=indent,
-                           options=options)
-
+            options = self._find_options(
+                source, name, lineno)
+            yield Example(source, '\n'.join(want), "",
+                          lineno=lineno+example_lineno,
+                          indent=indent,
+                          options=options)       
         # File constructions, on the other hand, don't match that
         # branch of the regular expression. Instead, they are have two
         # other indentation levels, but `preindent` is only used to
@@ -163,7 +175,7 @@ class ScriptDocTestParser(doctest.DocTestParser):
             options = self._find_options(m.group('options'), name, lineno)
             options[CREATE_FILE_BEFORE_TEST] = True
             
-            return Example("cat {:s}".format(sh_quote(filename)),
+            yield Example("cat {:s}".format(sh_quote(filename)),
                            file_content,
                            None,
                            lineno=lineno,
@@ -193,9 +205,7 @@ class ScriptDocTestParser(doctest.DocTestParser):
             # Update lineno (lines before this example)
             lineno += string.count('\n', charno, m.start())
             # Extract info from the regexp match and create an Example
-            example = self._parse_example(m, name, lineno)
-            # If it's actually an example, and not None, add it to the list.
-            if example:
+            for example in self._parse_example(m, name, lineno):
                 output.append(example)
             # Update lineno (lines inside this example)
             lineno += string.count('\n', m.start(), m.end())
@@ -410,12 +420,8 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
 
             if self.optionflags & CREATE_FILE_BEFORE_TEST:
                 split = sh_split(example.source)
-                if split[0] == "cat" and len(split) == 2:
-                    filename = split[1]
-                    with open(os.path.join(testenvironment.cwd, filename), "w") as file_to_write:
-                        file_to_write.write(example.want)
-                elif split[0] == "cat" and len(split) >= 3 and split[2].startswith("#"):
-                    # Okay, you  may have comments. But this may change.
+                if split[0] == "cat" and (len(split) == 2 or
+                                          len(split) >= 3 and split[2].startswith("#")):
                     filename = split[1]
                     with open(os.path.join(testenvironment.cwd, filename), "w") as file_to_write:
                         file_to_write.write(example.want)
@@ -424,22 +430,36 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
                         "Example requested file creation, "
                         "which works only if the command is of the form "
                         "`$ cat 'literal_filename'`", example.source)
-                
-            # Don't blink!  This is where the user's code gets run.
-            try:
-                # testenvironment does not run in shell mode. It's
-                # better explicit than implicit anyway.
-                output = testenvironment.run("/bin/sh", "-c", example.source,
-                                             expect_error=True,
-                                             err_to_out=True)
-            
-                self.debugger.set_continue() # ==== Example Finished ====
-                exception = output.returncode
-            except KeyboardInterrupt:
-                raise
 
-            got = output.stdout  # the actual output
-            self._fakeout.truncate(0)
+            by_python_pseudoshell = False
+            if self.optionflags & CHANGE_DIRECTORY:
+                split = sh_split(example.source)
+                if split[0] == "cd" and (len(split) == 2 or
+                                         len(split) > 2 and split[2].startswith("#")):
+                    dirname = os.path.join(testenvironment.cwd, split[1])
+                    if os.path.exists(dirname) and os.path.isdir(dirname):
+                        testenvironment.cwd = dirname
+                        got = ""
+                        by_python_pseudoshell = True
+                        exception = 0
+                        
+            if not by_python_pseudoshell:
+                # Don't blink!  This is where the user's code gets run.
+                try:
+                    # testenvironment does not run in shell mode. It's
+                    # better explicit than implicit anyway.
+                    output = testenvironment.run("/bin/sh", "-c", example.source,
+                                                 expect_error=True,
+                                                 err_to_out=True)
+
+                    self.debugger.set_continue() # ==== Example Finished ====
+                    exception = output.returncode
+                except KeyboardInterrupt:
+                    raise
+
+                got = output.stdout  # the actual output
+                self._fakeout.truncate(0)
+
             outcome = FAILURE   # guilty until proven innocent or insane
 
             # If the example executed without raising any exceptions,
