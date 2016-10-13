@@ -410,12 +410,8 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
 
             if self.optionflags & CREATE_FILE_BEFORE_TEST:
                 split = sh_split(example.source)
-                if split[0] == "cat" and len(split) == 2:
-                    filename = split[1]
-                    with open(os.path.join(testenvironment.cwd, filename), "w") as file_to_write:
-                        file_to_write.write(example.want)
-                elif split[0] == "cat" and len(split) >= 3 and split[2].startswith("#"):
-                    # Okay, you  may have comments. But this may change.
+                if split[0] == "cat" and (len(split) == 2 or
+                                          len(split) >= 3 and split[2].startswith("#")):
                     filename = split[1]
                     with open(os.path.join(testenvironment.cwd, filename), "w") as file_to_write:
                         file_to_write.write(example.want)
@@ -425,6 +421,14 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
                         "which works only if the command is of the form "
                         "`$ cat 'literal_filename'`", example.source)
                 
+            if self.optionflags & CHANGE_DIRECTORY:
+                split = sh_split(example.source)
+                if split[0] == "cd" and (len(split) == 2 or
+                                         len(split) > 2 and split[2].startswith("#")):
+                    dirname = os.path.join(testenvironment.cwd, split[1])
+                    if os.path.exists(dirname) and os.path.isdir(dirname):
+                        testenvironment.cwd = dirname
+
             # Don't blink!  This is where the user's code gets run.
             try:
                 # testenvironment does not run in shell mode. It's
