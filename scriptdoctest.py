@@ -6,19 +6,21 @@ import tempfile
 from doctest import (_load_testfile, OutputChecker, _SpoofOut,
                      _indent, _exception_traceback,
                      register_optionflag, _extract_future_flags,
-                     _OutputRedirectingPdb, Example, linecache,
-                     REPORT_ONLY_FIRST_FAILURE, SKIP, TestResults,
-                     master, FAIL_FAST)
+                     _OutputRedirectingPdb, Example, linecache, SKIP,
+                     TestResults, REPORT_ONLY_FIRST_FAILURE, master)
 
-
+try:
+    from doctest import FAIL_FAST
+except ImportError:
+    FAIL_FAST = register_optionflag("FAIL_FAST")
+    
 try:
     from shlex import quote as sh_quote, split as sh_split
 except ImportError:
     def sh_quote(string):
         return string
     def sh_split(string):
-        return split(string)
-    
+        return string.split()
 
 import pdb
 import scripttest
@@ -577,8 +579,11 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
             sys.displayhook = save_displayhook
             if clear_globs:
                 test.globs.clear()
-                import builtins
-                builtins._ = None
+                try:
+                    import builtins
+                    builtins._ = None
+                except ImportError:
+                    pass
 
 
 def testfile(filename, module_relative=True, name=None, package=None,
@@ -668,8 +673,14 @@ def testfile(filename, module_relative=True, name=None, package=None,
                          "relative paths.")
 
     # Relativize the path
-    text, filename = _load_testfile(filename, package, module_relative,
-                                    encoding or "utf-8")
+    try:
+        text, filename = _load_testfile(filename, package,
+                                        module_relative,
+                                        encoding or "utf-8")
+    except TypeError:
+        text, filename = _load_testfile(filename, package,
+                                        module_relative)
+        
 
     # If no name was given, then use the file's name.
     if name is None:
