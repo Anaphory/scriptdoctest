@@ -4,7 +4,7 @@ import setuptools
 
 setuptools.setup(
     name='scriptdoctest',
-    version='0.1',
+    version='0.3',
     description="""Helper to test interactive shell
         snippet examples in documentation""",
     long_description=open('README.rst').read(),
@@ -23,5 +23,6 @@ setuptools.setup(
     author_email='gereon.kaiping@gmail.com',
     url='https://github.com/Anaphory/scriptdoctest',
     license='MIT',
+    package_dir={'': 'src'},
     py_modules=['scriptdoctest', 'scripttest'],
 )
