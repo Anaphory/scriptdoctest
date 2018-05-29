@@ -1,6 +1,4 @@
-from scriptdoctest import *
-
-files = """ Let's create a file like this::
+"""Let's create a file like this::
 
     $ touch file
 and now see it exists ::
@@ -68,30 +66,33 @@ Note that `cd`s and environmental variables are in general
 non-persistent, but you can make a `cd` with a spelled-out path (no
 variable expansions, backticks etc.) stick by setting the
 CHANGE_DIRECTORY doctest directive.
+
+If you want to test the context of a ReStructured Text file instead of
+all docstrings in a python script,
+
 """
 
-print([m.groupdict() for m in 
-    re.compile(r'''(
-        ^(?P<preindent> [ ]*) ::\n
-        (?P<options>(
-            ([ ]*\n)|
-            (?P=preindent)[#] .*\n)*)
-        (?P<content>
-            ((?P<fullindent> (?P=preindent)[ ]+).*\n)*)
-        )''', re.MULTILINE | re.VERBOSE).finditer(files)])
+import re
+from scriptdoctest import ScriptDocTestParser, testfile
+
+print([m.groupdict() for m in
+       re.compile(r'''(
+           ^(?P<preindent> [ ]*) ::\n
+           (?P<options>(
+               ([ ]*\n)|
+               (?P=preindent)[#] .*\n)*)
+           (?P<content>
+               ((?P<fullindent> (?P=preindent)[ ]+).*\n)*)
+           )''', re.MULTILINE | re.VERBOSE).finditer(__doc__)])
 
 
 p = ScriptDocTestParser()
-for part in p.parse(files):
-    print("="*20)
+for part in p.parse(__doc__):
+    print("=" * 20)
     try:
         print("$", part.source)
         print(part.want)
     except AttributeError:
         print(part)
-    
+
 testfile(__file__)
-
-
-
-
