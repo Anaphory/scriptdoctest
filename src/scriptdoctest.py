@@ -3,12 +3,12 @@ import sys
 import re
 import doctest
 import tempfile
-from doctest import (_load_testfile, OutputChecker, _SpoofOut,
+from doctest import (_load_testfile, _SpoofOut,
                      _indent, _exception_traceback,
                      register_optionflag, _extract_future_flags,
                      _OutputRedirectingPdb, Example, linecache,
                      REPORT_ONLY_FIRST_FAILURE, SKIP, TestResults,
-                     master, FAIL_FAST)
+                     FAIL_FAST)
 
 
 try:
@@ -16,9 +16,10 @@ try:
 except ImportError:
     def sh_quote(string):
         return string
+
     def sh_split(string):
-        return split(string)
-    
+        return string.split()
+
 
 import pdb
 import scripttest
@@ -26,8 +27,9 @@ import scripttest
 CREATE_FILE_BEFORE_TEST = register_optionflag("CREATE_FILE_BEFORE_TEST")
 CHANGE_DIRECTORY = register_optionflag("CHANGE_DIRECTORY")
 
+
 ######################################################################
-## 3. ScriptDocTest Parser
+# 3. ScriptDocTest Parser
 ######################################################################
 
 class ScriptDocTestParser(doctest.DocTestParser):
@@ -58,6 +60,7 @@ class ScriptDocTestParser(doctest.DocTestParser):
             (?P=preindent)[#] .*\n)*)
         (?P<content>
             ((?P<fullindent> (?P=preindent)[ ]+).*\n)*)
+        \n?
         (?P=preindent) ---? [ ]* (?P<filename> .*)$
         )''', re.MULTILINE | re.VERBOSE)
 
@@ -115,7 +118,7 @@ class ScriptDocTestParser(doctest.DocTestParser):
 
             # Divide source into lines; check that they're properly
             # indented; and then strip their indentation & prompts.
-            lines = m.group('example').split('\n')
+            lines = m.group('example').split('\n')[:-1]
             
             source = ""
             want = []
@@ -136,7 +139,7 @@ class ScriptDocTestParser(doctest.DocTestParser):
                         yield Example(source, '\n'.join(want), "",
                                       lineno=lineno+example_lineno,
                                       indent=indent,
-                                      options=options)       
+                                      options=options)
                     source = line[2:]
                     want = []
                     example_lineno = l
@@ -155,7 +158,7 @@ class ScriptDocTestParser(doctest.DocTestParser):
             yield Example(source, '\n'.join(want), "",
                           lineno=lineno+example_lineno,
                           indent=indent,
-                          options=options)       
+                          options=options)
         # File constructions, on the other hand, don't match that
         # branch of the regular expression. Instead, they are have two
         # other indentation levels, but `preindent` is only used to
@@ -176,11 +179,11 @@ class ScriptDocTestParser(doctest.DocTestParser):
             options[CREATE_FILE_BEFORE_TEST] = True
             
             yield Example("cat {:s}".format(sh_quote(filename)),
-                           file_content,
-                           None,
-                           lineno=lineno,
-                           indent=indent,
-                           options=options)
+                          file_content,
+                          None,
+                          lineno=lineno,
+                          indent=indent,
+                          options=options)
 
     def parse(self, string, name='<string>'):
         """
@@ -209,6 +212,7 @@ class ScriptDocTestParser(doctest.DocTestParser):
                 output.append(example)
             # Update lineno (lines inside this example)
             lineno += string.count('\n', m.start(), m.end())
+            print(lineno)
             # Update charno.
             charno = m.end()
         # Add any remaining post-example text to `output`.
@@ -228,8 +232,185 @@ class ScriptDocTestParser(doctest.DocTestParser):
 
 
 ######################################################################
-## 5. ScriptDocTest Runner
+# 4. EllipsisOutputChecker
 ######################################################################
+
+
+class EllipsisOutputChecker(doctest.OutputChecker):
+    """A class for comparing real and expected output.
+
+    `EllipsisOutputChecker` checks whether the actual output from a
+    doctest example matches (including ellipsis consideration) the
+    expected output. It defines two methods: `check_output`, which
+    compares a given pair of outputs, and returns true if they match;
+    and `output_difference`, which returns a string describing the
+    differences between two outputs.
+
+    """
+
+    @staticmethod
+    def ellipsis_match(want, got):
+        """Check for a match up to ellipsis
+
+        Return True iff the actual output from an example (`got`)
+        matches the expected output (`want`). These strings are always
+        considered to match if they are identical; The regex
+        "\[\.\.\.[^]]*\]\n?", that is "[...]" or something like "[... more
+        lines]" in `want` may match any substring in `got`. If such an
+        ellipsis expression is on a separate line, it can match any
+        number (including 0) of lines.
+
+        A subtle case:
+
+            >>> EllipsisOutputChecker.ellipsis_match("aa[...]aa", "aaa")
+            False
+
+            >>> EllipsisOutputChecker.ellipsis_match(
+            ... '''Text A
+            ... [...]
+            ... Text B''',
+            ... '''Text A
+            ... Text B''')
+            True
+
+            >>> EllipsisOutputChecker.ellipsis_match(
+            ... '''Text A
+            ... [...]
+            ... Text B''',
+            ... '''Text A Text B''')
+            False
+
+            >>> EllipsisOutputChecker.ellipsis_match(
+            ... '''[...]
+            ... Test
+            ... [...]''',
+            ... '''Test''')
+            True
+
+            >>> EllipsisOutputChecker.ellipsis_match(
+            ... '''[...]''',
+            ... '''This
+            ... text''')
+            True
+
+            >>> EllipsisOutputChecker.ellipsis_match(
+            ... '''[... Some lines of code]
+            ... tests
+            ... [...]''',
+            ... '''Here we have
+            ... text and some
+            ... tests
+            ... ''')
+            True
+        
+        """
+        if "[..." not in want:
+            return want == got
+
+        want = want+"\n"
+        got = got+"\n"
+
+        # Find "the real" strings.
+        raw_ws = want.split("[...")
+        assert len(raw_ws) >= 2
+
+        # Find the closing brackets
+        ws = [raw_ws[0]]
+        for w in raw_ws[1:]:
+            i = w.index("]")
+            if len(w) > i + 1 and w[i+1] == "\n":
+                ws.append(w[i+2:])
+            else:
+                ws.append(w[i+1:])
+
+        # Deal with exact matches possibly needed at one or both ends.
+        startpos, endpos = 0, len(got)
+        w = ws[0]
+        if w:   # starts with exact match
+            if got.startswith(w):
+                startpos = len(w)
+                del ws[0]
+            else:
+                return False
+        w = ws[-1]
+        if w:   # ends with exact match
+            if got.endswith(w):
+                endpos -= len(w)
+                del ws[-1]
+            else:
+                return False
+
+        if startpos > endpos:
+            # Exact end matches required more characters than we have, as in
+            # _ellipsis_match('aa...aa', 'aaa')
+            return False
+
+        # For the rest, we only need to find the leftmost non-overlapping
+        # match for each piece.  If there's no overall match that way alone,
+        # there's no overall match period.
+        for w in ws:
+            # w may be '' at times, if there are consecutive ellipses, or
+            # due to an ellipsis at the start or end of `want`.  That's OK.
+            # Search for an empty string succeeds, and doesn't change startpos.
+            startpos = got.find(w, startpos, endpos)
+            if startpos < 0:
+                return False
+            startpos += len(w)
+
+        return True
+
+    def check_output(self, want, got, optionflags):
+        """
+        Return True iff the actual output from an example (`got`)
+        matches the expected output (`want`).  These strings are
+        always considered to match if they are identical; but
+        depending on what option flags the test runner is using,
+        several non-exact match types are also possible.  See the
+        documentation for `TestRunner` for more information about
+        option flags.
+        """
+
+        print(optionflags)
+
+        # If `want` contains hex-escaped character such as "\u1234",
+        # then `want` is a string of six characters(e.g. [\,u,1,2,3,4]).
+        # On the other hand, `got` could be another sequence of
+        # characters such as [\u1234], so `want` and `got` should
+        # be folded to hex-escaped ASCII string to compare.
+        got = self._toAscii(got)
+        want = self._toAscii(want)
+
+        # Handle the common case first, for efficiency:
+        # if they're string-identical, always return true.
+        if got == want:
+            return True
+
+        # This flag causes doctest to ignore any differences in the
+        # contents of whitespace strings.  Note that this can be used
+        # in conjunction with the ELLIPSIS flag.
+        if optionflags & doctest.NORMALIZE_WHITESPACE:
+            got = ' '.join(got.split())
+            want = ' '.join(want.split())
+            if got == want:
+                return True
+
+        # The ELLIPSIS flag says to let the regex "\[\.\.\.[^]]*\]",
+        # that is [...] or something like [... more lines] in `want`
+        # match any substring in `got`. If such an ellipsis expression
+        # is on a separate line, it can match any number (including 0)
+        # of lines.
+        if optionflags & doctest.ELLIPSIS:
+            if self.ellipsis_match(want, got):
+                return True
+
+        # We didn't find any match; return false.
+        return False
+
+
+######################################################################
+# 5. ScriptDocTest Runner
+######################################################################
+
 
 class ScriptDocTestRunner(doctest.DocTestRunner):
     """A class used to run DocTest test cases for scripts, and accumulate
@@ -237,8 +418,8 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
     case.  It returns a tuple `(f, t)`, where `t` is the number of
     test cases tried, and `f` is the number of test cases that failed.
 
-        >>> tests = DocTestFinder().find(_TestClass)
-        >>> runner = DocTestRunner(verbose=False)
+        >>> tests = doctest.DocTestFinder().find(_TestClass)
+        >>> runner = doctest.DocTestRunner(verbose=False)
         >>> tests.sort(key = lambda test: test.name)
         >>> for test in tests:
         ...     print(test.name, '->', runner.run(test))
@@ -308,7 +489,7 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
         it displays failures.  See the documentation for `testmod` for
         more information.
         """
-        self._checker = checker or OutputChecker()
+        self._checker = checker or EllipsisOutputChecker()
         if verbose is None:
             verbose = '-v' in sys.argv
         self._verbose = verbose
@@ -325,9 +506,7 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
 
         self.directory = tempfile.mkdtemp(prefix="scripttest")
 
-    #/////////////////////////////////////////////////////////////////
     # Reporting methods
-    #/////////////////////////////////////////////////////////////////
 
     def report_unexpected_exception(self, out, test, example, exc_info):
         """
@@ -361,9 +540,7 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
         else:
             return self.save_linecache_getlines(filename, module_globals)
 
-    #/////////////////////////////////////////////////////////////////
     # DocTest Running
-    #/////////////////////////////////////////////////////////////////
 
     def __run(self, test, compileflags, out):
         """
@@ -382,7 +559,7 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
         # to modify them).
         original_optionflags = self.optionflags
 
-        SUCCESS, FAILURE, BOOM = range(3) # `outcome` state
+        SUCCESS, FAILURE, BOOM = range(3)  # `outcome` state
 
         check = self._checker.check_output
 
@@ -421,9 +598,12 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
             if self.optionflags & CREATE_FILE_BEFORE_TEST:
                 split = sh_split(example.source)
                 if split[0] == "cat" and (len(split) == 2 or
-                                          len(split) >= 3 and split[2].startswith("#")):
+                                          len(split) >= 3 and
+                                          split[2].startswith("#")):
                     filename = split[1]
-                    with open(os.path.join(testenvironment.cwd, filename), "w") as file_to_write:
+                    with open(
+                            os.path.join(testenvironment.cwd,
+                                         filename), "w") as file_to_write:
                         file_to_write.write(example.want)
                 else:
                     raise ValueError(
@@ -435,7 +615,8 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
             if self.optionflags & CHANGE_DIRECTORY:
                 split = sh_split(example.source)
                 if split[0] == "cd" and (len(split) == 2 or
-                                         len(split) > 2 and split[2].startswith("#")):
+                                         len(split) > 2 and
+                                         split[2].startswith("#")):
                     dirname = os.path.join(testenvironment.cwd, split[1])
                     if os.path.exists(dirname) and os.path.isdir(dirname):
                         testenvironment.cwd = dirname
@@ -448,11 +629,13 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
                 try:
                     # testenvironment does not run in shell mode. It's
                     # better explicit than implicit anyway.
-                    output = testenvironment.run("/bin/sh", "-c", example.source,
+                    output = testenvironment.run("/bin/sh", "-c",
+                                                 example.source,
                                                  expect_error=True,
                                                  err_to_out=True)
 
-                    self.debugger.set_continue() # ==== Example Finished ====
+                    self.debugger.set_continue()
+                    # ==== Example Finished ====
                     exception = output.returncode
                 except KeyboardInterrupt:
                     raise
@@ -504,11 +687,10 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
         Record the fact that the given DocTest (`test`) generated `f`
         failures out of `t` tried examples.
         """
-        f2, t2 = self._name2ft.get(test.name, (0,0))
+        f2, t2 = self._name2ft.get(test.name, (0, 0))
         self._name2ft[test.name] = (f+f2, t+t2)
         self.failures += f
         self.tries += t
-
 
     def run(self, test, compileflags=None, out=None, clear_globs=True):
         """
@@ -581,10 +763,13 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
                 builtins._ = None
 
 
+master = None
+
+
 def testfile(filename, module_relative=True, name=None, package=None,
              globs=None, verbose=None, report=True, optionflags=0,
-             extraglobs=None, raise_on_error=False, parser=ScriptDocTestParser(),
-             encoding=None):
+             extraglobs=None, raise_on_error=False,
+             parser=ScriptDocTestParser(), encoding=None):
     """
     Test examples in the given file.  Return (#failures, #tests).
 
@@ -700,3 +885,34 @@ def testfile(filename, module_relative=True, name=None, package=None,
         master.merge(runner)
 
     return TestResults(runner.failures, runner.tries)
+
+
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser(description="")
+    parser.add_argument("filename")
+    parser.add_argument("--module_relative", default=False)
+    parser.add_argument("--name", default=None)
+    parser.add_argument("--package", default=None)
+    parser.add_argument("--globs", default=None)
+    parser.add_argument("--verbose", default=None)
+    parser.add_argument("--report", default=True)
+    parser.add_argument("--optionflags",
+                        default=(doctest.ELLIPSIS | CHANGE_DIRECTORY))
+    parser.add_argument("--extraglobs", default=None)
+    parser.add_argument("--raise_on_error", default=False)
+    parser.add_argument("--parser", default=ScriptDocTestParser())
+    parser.add_argument("--encoding", default=None)
+    args = parser.parse_args()
+    testfile(filename=args.filename,
+             module_relative=args.module_relative,
+             name=args.name,
+             package=args.package,
+             globs=args.globs,
+             verbose=args.verbose,
+             report=args.report,
+             optionflags=args.optionflags,
+             extraglobs=args.extraglobs,
+             raise_on_error=args.raise_on_error,
+             parser=args.parser,
+             encoding=args.encoding)

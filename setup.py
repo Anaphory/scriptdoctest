@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
 
-try:
-    from setuptools import setup
-except ImportError:
-    from distutils.core import setup
+from setuptools import setup, find_packages
 
 setup(
     name="scriptdocdest",
@@ -13,5 +10,6 @@ setup(
     author_email="anaphory@yahoo.de",
     license="MIT",
     modules=["scripttest.py", "scriptdoctest.py"],
+    packages=find_packages(where='src'),
+    package_dir={'': 'src'},
 )
-    
