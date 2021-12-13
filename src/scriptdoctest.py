@@ -3,20 +3,32 @@ import sys
 import re
 import doctest
 import tempfile
-from doctest import (_load_testfile, _SpoofOut,
-                     _indent, _exception_traceback,
-                     register_optionflag, _extract_future_flags,
-                     _OutputRedirectingPdb, Example, linecache, SKIP,
-                     TestResults, REPORT_ONLY_FIRST_FAILURE, master)
+import unicodedata
+from doctest import (
+    _load_testfile,
+    _SpoofOut,
+    _indent,
+    _exception_traceback,
+    register_optionflag,
+    _extract_future_flags,
+    _OutputRedirectingPdb,
+    Example,
+    linecache,
+    SKIP,
+    TestResults,
+    REPORT_ONLY_FIRST_FAILURE,
+    master,
+)
 
 try:
     from doctest import FAIL_FAST
 except ImportError:
     FAIL_FAST = register_optionflag("FAIL_FAST")
-    
+
 try:
     from shlex import quote as sh_quote, split as sh_split
 except ImportError:
+
     def sh_quote(string):
         return string
 
@@ -35,16 +47,19 @@ CHANGE_DIRECTORY = register_optionflag("CHANGE_DIRECTORY")
 # 3. ScriptDocTest Parser
 ######################################################################
 
+
 class ScriptDocTestParser(doctest.DocTestParser):
     """
     A class used to parse strings containing scriptdoctest examples.
     """
+
     # This regular expression is used to find doctest examples in a
     # string.  It defines three groups: `source` is the source code
     # (including leading indentation and prompts); `indent` is the
     # indentation of the first (PS1) line of the source code; and
     # `want` is the expected output (including leading indentation).
-    _EXAMPLE_RE = re.compile(r'''(
+    _EXAMPLE_RE = re.compile(
+        r"""(
         # Source consists of ::, an empty line, and then a PS1 line
         # followed by indented or blank lines. Splitting out
         # separate commands and their sources and wants is an issue
@@ -65,7 +80,9 @@ class ScriptDocTestParser(doctest.DocTestParser):
             ((?P<fullindent> (?P=preindent)[ ]+).*\n)*)
         \n?
         (?P=preindent) ---? [ ]* (?P<filename> .*)$
-        )''', re.MULTILINE | re.VERBOSE)
+        )""",
+        re.MULTILINE | re.VERBOSE,
+    )
 
     # A regular expression for handling `want` strings that contain
     # expected exceptions.  It divides `want` into three pieces:
@@ -76,7 +93,8 @@ class ScriptDocTestParser(doctest.DocTestParser):
     # `msg` may have multiple lines.  We assume/require that the
     # exception message is the first non-indented line starting with a word
     # character following the traceback header line.
-    _EXCEPTION_RE = re.compile(r"""
+    _EXCEPTION_RE = re.compile(
+        r"""
         # Grab the traceback header.  Different versions of Python have
         # said different things on the first traceback line.
         ^(?P<hdr> Traceback\ \(
@@ -87,7 +105,9 @@ class ScriptDocTestParser(doctest.DocTestParser):
         \s* $                # toss trailing whitespace on the header.
         (?P<stack> .*?)      # don't blink: absorb stuff until...
         ^ (?P<msg> \w+ .*)   #     a line *starts* with alphanum.
-        """, re.VERBOSE | re.MULTILINE | re.DOTALL)
+        """,
+        re.VERBOSE | re.MULTILINE | re.DOTALL,
+    )
 
     def get_doctest(self, string, globs, name, filename, lineno):
         """
@@ -98,8 +118,9 @@ class ScriptDocTestParser(doctest.DocTestParser):
         the new `DocTest` object.  See the documentation for `DocTest`
         for more information.
         """
-        return doctest.DocTest(self.get_examples(string, name), globs,
-                               name, filename, lineno, string)
+        return doctest.DocTest(
+            self.get_examples(string, name), globs, name, filename, lineno, string
+        )
 
     def _parse_example(self, m, name, lineno):
         """
@@ -115,14 +136,14 @@ class ScriptDocTestParser(doctest.DocTestParser):
 
         # The regex matches both code examples and file
         # constructions. Code examples are indented by `indent`.
-        if m.group('indent'):
+        if m.group("indent"):
             # Get the example's indentation level.
-            indent = len(m.group('indent'))
+            indent = len(m.group("indent"))
 
             # Divide source into lines; check that they're properly
             # indented; and then strip their indentation & prompts.
-            lines = m.group('example').split('\n')[:-1]
-            
+            lines = m.group("example").split("\n")[:-1]
+
             source = ""
             want = []
             example_lineno = 0
@@ -137,12 +158,15 @@ class ScriptDocTestParser(doctest.DocTestParser):
                         pass
                     else:
                         # Extract options from the source.
-                        options = self._find_options(
-                            source, name, lineno)
-                        yield Example(source, '\n'.join(want), "",
-                                      lineno=lineno+example_lineno,
-                                      indent=indent,
-                                      options=options)
+                        options = self._find_options(source, name, lineno)
+                        yield Example(
+                            source,
+                            "\n".join(want),
+                            "",
+                            lineno=lineno + example_lineno,
+                            indent=indent,
+                            options=options,
+                        )
                     source = line[2:]
                     want = []
                     example_lineno = l
@@ -150,45 +174,50 @@ class ScriptDocTestParser(doctest.DocTestParser):
                     if want:
                         want.append(line)
                     else:
-                        source = '\n'.join(source, line[2:])
+                        source = "{:}\n{:}".format(source, line[2:])
                 else:
                     want.append(line)
 
             # Construct the last example.
             # Extract options from the source.
-            options = self._find_options(
-                source, name, lineno)
-            yield Example(source, '\n'.join(want), "",
-                          lineno=lineno+example_lineno,
-                          indent=indent,
-                          options=options)
+            options = self._find_options(source, name, lineno)
+            yield Example(
+                source,
+                "\n".join(want),
+                "",
+                lineno=lineno + example_lineno,
+                indent=indent,
+                options=options,
+            )
         # File constructions, on the other hand, don't match that
         # branch of the regular expression. Instead, they are have two
         # other indentation levels, but `preindent` is only used to
         # find the corresponding file name after it.
-        elif m.group('preindent'):
-            indent = len(m.group('fullindent'))
+        elif m.group("preindent"):
+            indent = len(m.group("fullindent"))
 
             # Divide file into lines; check that they're properly
             # indented; and then strip their indentation.
-            file_lines = m.group('content').split('\n')
-            self._check_prefix(file_lines, ' '*indent, name, lineno)
-            file_content = '\n'.join([fl[indent:] for fl in file_lines])
+            file_lines = m.group("content").split("\n")
+            self._check_prefix(file_lines, " " * indent, name, lineno)
+            file_content = "\n".join([fl[indent:] for fl in file_lines])
 
             # The file name is just that, stripped.
             filename = m.group("filename")
 
-            options = self._find_options(m.group('options'), name, lineno)
+            options = self._find_options(m.group("options"), name, lineno)
             options[CREATE_FILE_BEFORE_TEST] = True
-            
-            yield Example("cat {:s}".format(sh_quote(filename)),
-                          file_content,
-                          None,
-                          lineno=lineno,
-                          indent=indent,
-                          options=options)
 
-    def parse(self, string, name='<string>'):
+            yield Example(
+                "cat {:s}".format(sh_quote(filename)),
+                file_content,
+                None,
+                lineno=lineno,
+                indent=indent,
+                options=options,
+            )
+
+    def parse(self, string, name="<string>"):
         """
         Divide the given string into examples and intervening text,
         and return them as a list of alternating Examples and strings.
@@ -200,21 +229,21 @@ class ScriptDocTestParser(doctest.DocTestParser):
         # If all lines begin with the same indentation, then strip it.
         min_indent = self._min_indent(string)
         if min_indent > 0:
-            string = '\n'.join([l[min_indent:] for l in string.split('\n')])
+            string = "\n".join([l[min_indent:] for l in string.split("\n")])
 
         output = []
         charno, lineno = 0, 0
         # Find all doctest examples in the string:
         for m in self._EXAMPLE_RE.finditer(string):
             # Add the pre-example text to `output`.
-            output.append(string[charno:m.start()])
+            output.append(string[charno : m.start()])
             # Update lineno (lines before this example)
-            lineno += string.count('\n', charno, m.start())
+            lineno += string.count("\n", charno, m.start())
             # Extract info from the regexp match and create an Example
             for example in self._parse_example(m, name, lineno):
                 output.append(example)
             # Update lineno (lines inside this example)
-            lineno += string.count('\n', m.start(), m.end())
+            lineno += string.count("\n", m.start(), m.end())
             print(lineno)
             # Update charno.
             charno = m.end()
@@ -238,6 +267,7 @@ class ScriptDocTestParser(doctest.DocTestParser):
 # 4. EllipsisOutputChecker
 ######################################################################
 
+ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 
 class EllipsisOutputChecker(doctest.OutputChecker):
     """A class for comparing real and expected output.
@@ -305,13 +335,13 @@ class EllipsisOutputChecker(doctest.OutputChecker):
             ... tests
             ... ''')
             True
-        
+
         """
         if "[..." not in want:
             return want == got
 
-        want = want+"\n"
-        got = got+"\n"
+        want = want + "\n"
+        got = got + "\n"
 
         # Find "the real" strings.
         raw_ws = want.split("[...")
@@ -321,22 +351,22 @@ class EllipsisOutputChecker(doctest.OutputChecker):
         ws = [raw_ws[0]]
         for w in raw_ws[1:]:
             i = w.index("]")
-            if len(w) > i + 1 and w[i+1] == "\n":
-                ws.append(w[i+2:])
+            if len(w) > i + 1 and w[i + 1] == "\n":
+                ws.append(w[i + 2 :])
             else:
-                ws.append(w[i+1:])
+                ws.append(w[i + 1 :])
 
         # Deal with exact matches possibly needed at one or both ends.
         startpos, endpos = 0, len(got)
         w = ws[0]
-        if w:   # starts with exact match
+        if w:  # starts with exact match
             if got.startswith(w):
                 startpos = len(w)
                 del ws[0]
             else:
                 return False
         w = ws[-1]
-        if w:   # ends with exact match
+        if w:  # ends with exact match
             if got.endswith(w):
                 endpos -= len(w)
                 del ws[-1]
@@ -375,13 +405,24 @@ class EllipsisOutputChecker(doctest.OutputChecker):
 
         print(optionflags)
 
-        # If `want` contains hex-escaped character such as "\u1234",
-        # then `want` is a string of six characters(e.g. [\,u,1,2,3,4]).
-        # On the other hand, `got` could be another sequence of
-        # characters such as [\u1234], so `want` and `got` should
-        # be folded to hex-escaped ASCII string to compare.
-        got = self._toAscii(got)
-        want = self._toAscii(want)
+        # If `want` contains no ANSI C1 escape sequences, but `got` is
+        # generated with them eg. from a program that uses color output, they
+        # will not match but should. To normalize, strip the escape sequences
+        # from both.
+
+        # In addition, we normalize the unicode form, and if there are carriage
+        # returns on a line, we assume they indeed reset the line.
+        got = ansi_escape.sub('', got)
+        got = unicodedata.normalize("NFC", got)
+        got = got.replace("\t", "    ")
+        got = '\n'.join(
+            line.rsplit("\r", 1)[-1]
+            for line in got.split("\n")
+            )
+
+        want = ansi_escape.sub('', want)
+        want = unicodedata.normalize("NFC", want)
+        want = want.replace("\t", "    ")
 
         # Handle the common case first, for efficiency:
         # if they're string-identical, always return true.
@@ -392,8 +433,8 @@ class EllipsisOutputChecker(doctest.OutputChecker):
         # contents of whitespace strings.  Note that this can be used
         # in conjunction with the ELLIPSIS flag.
         if optionflags & doctest.NORMALIZE_WHITESPACE:
-            got = ' '.join(got.split())
-            want = ' '.join(want.split())
+            got = " ".join(got.split())
+            want = " ".join(want.split())
             if got == want:
                 return True
 
@@ -406,7 +447,6 @@ class EllipsisOutputChecker(doctest.OutputChecker):
             if self.ellipsis_match(want, got):
                 return True
 
-        # We didn't find any match; return false.
         return False
 
 
@@ -471,11 +511,12 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
     `report_unexpected_exception`, and `report_failure`.
 
     """
+
     # This divider string is used to separate failure messages, and to
     # separate sections of the summary.
     DIVIDER = "*" * 70
 
-    def __init__(self, checker=None, verbose=None, optionflags=0):
+    def __init__(self, checker=None, verbose=None, optionflags=0, base_path=None):
         """
         Create a new test runner.
 
@@ -494,7 +535,7 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
         """
         self._checker = checker or EllipsisOutputChecker()
         if verbose is None:
-            verbose = '-v' in sys.argv
+            verbose = "-v" in sys.argv
         self._verbose = verbose
         self.optionflags = optionflags
         self.original_optionflags = optionflags
@@ -507,7 +548,10 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
         # Create a fake output target for capturing doctest output.
         self._fakeout = _SpoofOut()
 
-        self.directory = tempfile.mkdtemp(prefix="scripttest")
+        if base_path:
+            self.directory = base_path
+        else:
+            self.directory = None
 
     # Reporting methods
 
@@ -515,8 +559,11 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
         """
         Report that the given example raised an unexpected exception.
         """
-        out(self._failure_header(test, example) +
-            'Exception raised:\n' + _indent(_exception_traceback(exc_info)))
+        out(
+            self._failure_header(test, example)
+            + "Exception raised:\n"
+            + _indent(_exception_traceback(exc_info))
+        )
 
     def _failure_header(self, test, example):
         out = [self.DIVIDER]
@@ -524,21 +571,20 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
             if test.lineno is not None and example.lineno is not None:
                 lineno = test.lineno + example.lineno + 1
             else:
-                lineno = '?'
-            out.append('File "%s", line %s, in %s' %
-                       (test.filename, lineno, test.name))
+                lineno = "?"
+            out.append('File "%s", line %s, in %s' % (test.filename, lineno, test.name))
         else:
-            out.append('Line %s, in %s' % (example.lineno+1, test.name))
-        out.append('Failed example:')
+            out.append("Line %s, in %s" % (example.lineno + 1, test.name))
+        out.append("Failed example:")
         source = example.source
         out.append(_indent(source))
-        return '\n'.join(out)
+        return "\n".join(out)
 
     # util
     def __patched_linecache_getlines(self, filename, module_globals=None):
         m = self.__LINECACHE_FILENAME_RE.match(filename)
-        if m and m.group('name') == self.test.name:
-            example = self.test.examples[int(m.group('examplenum'))]
+        if m and m.group("name") == self.test.name:
+            example = self.test.examples[int(m.group("examplenum"))]
             return example.source.splitlines(keepends=True)
         else:
             return self.save_linecache_getlines(filename, module_globals)
@@ -566,15 +612,14 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
 
         check = self._checker.check_output
 
-        testenvironment = scripttest.TestFileEnvironment()
+        testenvironment = scripttest.TestFileEnvironment(base_path = self.directory)
 
         # Process each example.
         for examplenum, example in enumerate(test.examples):
 
             # If REPORT_ONLY_FIRST_FAILURE is set, then suppress
             # reporting after the first failure.
-            quiet = (self.optionflags & REPORT_ONLY_FIRST_FAILURE and
-                     failures > 0)
+            quiet = self.optionflags & REPORT_ONLY_FIRST_FAILURE and failures > 0
 
             # Merge in the example's options.
             self.optionflags = original_optionflags
@@ -600,42 +645,64 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
 
             if self.optionflags & CREATE_FILE_BEFORE_TEST:
                 split = sh_split(example.source)
-                if split[0] == "cat" and (len(split) == 2 or
-                                          len(split) >= 3 and
-                                          split[2].startswith("#")):
+                if split[0] == "cat" and (
+                    len(split) == 2 or len(split) >= 3 and split[2].startswith("#")
+                ):
                     filename = split[1]
                     with open(
-                            os.path.join(testenvironment.cwd,
-                                         filename), "w") as file_to_write:
+                        os.path.join(testenvironment.cwd, filename), "w"
+                    ) as file_to_write:
                         file_to_write.write(example.want)
                 else:
                     raise ValueError(
                         "Example requested file creation, "
                         "which works only if the command is of the form "
-                        "`$ cat 'literal_filename'`", example.source)
+                        "`$ cat 'literal_filename'`",
+                        example.source,
+                    )
 
             by_python_pseudoshell = False
             if self.optionflags & CHANGE_DIRECTORY:
                 split = sh_split(example.source)
-                if split[0] == "cd" and (len(split) == 2 or
-                                         len(split) > 2 and
-                                         split[2].startswith("#")):
+                if split[0] == "cd" and (
+                    len(split) == 2 or len(split) > 2 and split[2].startswith("#")
+                ):
                     dirname = os.path.join(testenvironment.cwd, split[1])
                     if os.path.exists(dirname) and os.path.isdir(dirname):
                         testenvironment.cwd = dirname
                         got = ""
                         by_python_pseudoshell = True
                         exception = 0
-                        
+                elif split[0] == "export" and (
+                    len(split) == 2 or len(split) > 2 and split[2].startswith("#")
+                ):
+                    variable, value = split[1].split("=")
+                    testenvironment.environ[variable] = value
+                    by_python_pseudoshell = True
+                    got = ""
+                    exception = 0
+
+            if example.source.startswith("python -m"):
+                data_file = os.path.abspath("./.coverage")
+                coverage_file = os.path.abspath("./.coveragerc")
+                with open(coverage_file, "w") as coveragerc:
+                    coveragerc.write(f"""[run]
+branch=True
+data_file={data_file:}""")
+                example.source = example.source.replace("python -m", f"coverage run -a --source lexedata --rcfile={coverage_file} -m")
+
             if not by_python_pseudoshell:
                 # Don't blink!  This is where the user's code gets run.
                 try:
                     # testenvironment does not run in shell mode. It's
                     # better explicit than implicit anyway.
-                    output = testenvironment.run("/bin/sh", "-c",
-                                                 example.source,
-                                                 expect_error=True,
-                                                 err_to_out=True)
+                    output = testenvironment.run(
+                        "/bin/sh",
+                        "-c",
+                        example.source,
+                        expect_error=True,
+                        err_to_out=True,
+                    )
 
                     self.debugger.set_continue()
                     # ==== Example Finished ====
@@ -646,7 +713,7 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
                 got = output.stdout  # the actual output
                 self._fakeout.truncate(0)
 
-            outcome = FAILURE   # guilty until proven innocent or insane
+            outcome = FAILURE  # guilty until proven innocent or insane
 
             # If the example executed without raising any exceptions,
             # verify its output.
@@ -669,8 +736,7 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
                 failures += 1
             elif outcome is BOOM:
                 if not quiet:
-                    self.report_unexpected_exception(out, test, example,
-                                                     exception)
+                    self.report_unexpected_exception(out, test, example, exception)
                 failures += 1
             else:
                 assert False, ("unknown outcome", outcome)
@@ -691,7 +757,7 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
         failures out of `t` tried examples.
         """
         f2, t2 = self._name2ft.get(test.name, (0, 0))
-        self._name2ft[test.name] = (f+f2, t+t2)
+        self._name2ft[test.name] = (f + f2, t + t2)
         self.failures += f
         self.tries += t
 
@@ -723,13 +789,14 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
         save_stdout = sys.stdout
         if out is None:
             encoding = save_stdout.encoding
-            if encoding is None or encoding.lower() == 'utf-8':
+            if encoding is None or encoding.lower() == "utf-8":
                 out = save_stdout.write
             else:
                 # Use backslashreplace error handling on write
                 def out(s):
-                    s = str(s.encode(encoding, 'backslashreplace'), encoding)
+                    s = str(s.encode(encoding, "backslashreplace"), encoding)
                     save_stdout.write(s)
+
         sys.stdout = self._fakeout
 
         # Patch pdb.set_trace to restore sys.stdout during interactive
@@ -764,6 +831,7 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
                 test.globs.clear()
                 try:
                     import builtins
+
                     builtins._ = None
                 except ImportError:
                     pass
@@ -772,10 +840,21 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
 master = None
 
 
-def testfile(filename, module_relative=True, name=None, package=None,
-             globs=None, verbose=None, report=True, optionflags=0,
-             extraglobs=None, raise_on_error=False,
-             parser=ScriptDocTestParser(), encoding=None):
+def testfile(
+    filename,
+    module_relative=True,
+    name=None,
+    package=None,
+    globs=None,
+    verbose=None,
+    report=True,
+    optionflags=0,
+    extraglobs=None,
+    raise_on_error=False,
+    parser=ScriptDocTestParser(),
+    encoding=None,
+        base_path = None,
+):
     """
     Test examples in the given file.  Return (#failures, #tests).
 
@@ -855,18 +934,15 @@ def testfile(filename, module_relative=True, name=None, package=None,
     global master
 
     if package and not module_relative:
-        raise ValueError("Package may only be specified for module-"
-                         "relative paths.")
+        raise ValueError("Package may only be specified for module-" "relative paths.")
 
     # Relativize the path
     try:
-        text, filename = _load_testfile(filename, package,
-                                        module_relative,
-                                        encoding or "utf-8")
+        text, filename = _load_testfile(
+            filename, package, module_relative, encoding or "utf-8"
+        )
     except TypeError:
-        text, filename = _load_testfile(filename, package,
-                                        module_relative)
-        
+        text, filename = _load_testfile(filename, package, module_relative)
 
     # If no name was given, then use the file's name.
     if name is None:
@@ -879,10 +955,10 @@ def testfile(filename, module_relative=True, name=None, package=None,
         globs = globs.copy()
     if extraglobs is not None:
         globs.update(extraglobs)
-    if '__name__' not in globs:
-        globs['__name__'] = '__main__'
+    if "__name__" not in globs:
+        globs["__name__"] = "__main__"
 
-    runner = ScriptDocTestRunner(verbose=verbose, optionflags=optionflags)
+    runner = ScriptDocTestRunner(verbose=verbose, optionflags=optionflags, base_path=base_path)
 
     # Read the file, convert it to a test, and run it.
     test = parser.get_doctest(text, globs, name, filename, 0)
@@ -899,32 +975,38 @@ def testfile(filename, module_relative=True, name=None, package=None,
     return TestResults(runner.failures, runner.tries)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser(description="")
     parser.add_argument("filename")
-    parser.add_argument("--module_relative", default=False)
+    parser.add_argument("--base_path")
+    parser.add_argument("--module_relative", action="store_true", default=False)
     parser.add_argument("--name", default=None)
     parser.add_argument("--package", default=None)
     parser.add_argument("--globs", default=None)
     parser.add_argument("--verbose", default=None)
-    parser.add_argument("--report", default=True)
-    parser.add_argument("--optionflags",
-                        default=(doctest.ELLIPSIS | CHANGE_DIRECTORY))
+    parser.add_argument("--report", action="store_false", default=True)
+    parser.add_argument("--optionflags", default=(doctest.ELLIPSIS | CHANGE_DIRECTORY))
     parser.add_argument("--extraglobs", default=None)
-    parser.add_argument("--raise_on_error", default=False)
+    parser.add_argument("--raise_on_error", action="store_true", default=False)
     parser.add_argument("--parser", default=ScriptDocTestParser())
     parser.add_argument("--encoding", default=None)
     args = parser.parse_args()
-    testfile(filename=args.filename,
-             module_relative=args.module_relative,
-             name=args.name,
-             package=args.package,
-             globs=args.globs,
-             verbose=args.verbose,
-             report=args.report,
-             optionflags=args.optionflags,
-             extraglobs=args.extraglobs,
-             raise_on_error=args.raise_on_error,
-             parser=args.parser,
-             encoding=args.encoding)
+    results = testfile(
+        filename=args.filename,
+        module_relative=args.module_relative,
+        name=args.name,
+        package=args.package,
+        globs=args.globs,
+        verbose=args.verbose,
+        report=args.report,
+        optionflags=args.optionflags,
+        extraglobs=args.extraglobs,
+        raise_on_error=args.raise_on_error,
+        parser=args.parser,
+        encoding=args.encoding,
+        base_path=args.base_path,
+    )
+    if results.failed:
+        sys.exit(1)

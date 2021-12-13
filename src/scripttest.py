@@ -150,6 +150,15 @@ class TestFileEnvironment(object):
         environment (using ``$TMPDIR``).  You can then assert that no
         temporary files are left using ``.assert_no_temp()``.
         """
+        self.capture_temp = capture_temp
+        if self.capture_temp:
+            self.temp_path = tempfile.mkdtemp()
+            self.environ['TMPDIR'] = self.temp_path
+        else:
+            self.temp_path = None
+
+        self.ignore_paths = ignore_paths or []
+
         if base_path is None:
             base_path = tempfile.mkdtemp()
             open(os.path.join(
@@ -169,13 +178,6 @@ class TestFileEnvironment(object):
         if cwd is None:
             cwd = base_path
         self.cwd = cwd
-        self.capture_temp = capture_temp
-        if self.capture_temp:
-            self.temp_path = tempfile.mkdtemp()
-            self.environ['TMPDIR'] = self.temp_path
-        else:
-            self.temp_path = None
-        self.ignore_paths = ignore_paths or []
         self.ignore_hidden = ignore_hidden
         self.split_cmd = split_cmd
 
