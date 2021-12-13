@@ -5,8 +5,7 @@ import setuptools
 setuptools.setup(
     name='scriptdoctest',
     version='0.3',
-    description="""Helper to test interactive shell
-        snippet examples in documentation""",
+    description="""Helper to test interactive shell snippet examples in documentation""",
     long_description=open('README.rst').read(),
     classifiers=[
         'Development Status :: 3 - Alpha',
