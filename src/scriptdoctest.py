@@ -987,7 +987,7 @@ if __name__ == "__main__":
     parser.add_argument("--globs", default=None)
     parser.add_argument("--verbose", default=None)
     parser.add_argument("--report", action="store_false", default=True)
-    parser.add_argument("--optionflags", default=(doctest.ELLIPSIS | CHANGE_DIRECTORY))
+    parser.add_argument("--optionflags", type=int, default=(doctest.ELLIPSIS | CHANGE_DIRECTORY))
     parser.add_argument("--extraglobs", default=None)
     parser.add_argument("--raise_on_error", action="store_true", default=False)
     parser.add_argument("--parser", default=ScriptDocTestParser())
