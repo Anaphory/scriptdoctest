@@ -17,6 +17,7 @@ from doctest import (
     SKIP,
     TestResults,
     REPORT_ONLY_FIRST_FAILURE,
+    OPTIONFLAGS_BY_NAME,
     master,
 )
 
@@ -40,7 +41,8 @@ import pdb
 import scripttest
 
 CREATE_FILE_BEFORE_TEST = register_optionflag("CREATE_FILE_BEFORE_TEST")
-CHANGE_DIRECTORY = register_optionflag("CHANGE_DIRECTORY")
+PSEUDOSHELL = register_optionflag("PSEUDOSHELL")
+COVERAGE = register_optionflag("COVERAGE")
 
 
 ######################################################################
@@ -662,7 +664,7 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
                     )
 
             by_python_pseudoshell = False
-            if self.optionflags & CHANGE_DIRECTORY:
+            if self.optionflags & PSEUDOSHELL:
                 split = sh_split(example.source)
                 if split[0] == "cd" and (
                     len(split) == 2 or len(split) > 2 and split[2].startswith("#")
@@ -682,7 +684,7 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
                     got = ""
                     exception = 0
 
-            if example.source.startswith("python -m"):
+            if example.source.startswith("python -m") and (self.optionflags & COVERAGE):
                 data_file = os.path.abspath("./.coverage")
                 coverage_file = os.path.abspath("./.coveragerc")
                 with open(coverage_file, "w") as coveragerc:
@@ -987,12 +989,24 @@ if __name__ == "__main__":
     parser.add_argument("--globs", default=None)
     parser.add_argument("--verbose", default=None)
     parser.add_argument("--report", action="store_false", default=True)
-    parser.add_argument("--optionflags", type=int, default=(doctest.ELLIPSIS | CHANGE_DIRECTORY))
+    parser.add_argument('-o', '--option', action='append',
+                        choices=[f"+{o}" for o in OPTIONFLAGS_BY_NAME]+[f"-{o}" for o in OPTIONFLAGS_BY_NAME], default=["+ELLIPSIS", "+PSEUDOSHELL"],
+                        help=('specify a doctest option flag to apply to the test run; may be specified more than once to apply multiple options. (default: +ELLIPSIS +PSEUDOSHELL)'))
+
     parser.add_argument("--extraglobs", default=None)
     parser.add_argument("--raise_on_error", action="store_true", default=False)
     parser.add_argument("--parser", default=ScriptDocTestParser())
     parser.add_argument("--encoding", default=None)
     args = parser.parse_args()
+    options = 0
+    for option in args.option:
+        if option.startswith("+"):
+            options |= OPTIONFLAGS_BY_NAME[option[1:]]
+        elif option.startswith("-"):
+            options &= ~OPTIONFLAGS_BY_NAME[option[1:]]
+        else:
+            options |= OPTIONFLAGS_BY_NAME[option]
+
     results = testfile(
         filename=args.filename,
         module_relative=args.module_relative,
@@ -1001,7 +1015,7 @@ if __name__ == "__main__":
         globs=args.globs,
         verbose=args.verbose,
         report=args.report,
-        optionflags=args.optionflags,
+        optionflags=options,
         extraglobs=args.extraglobs,
         raise_on_error=args.raise_on_error,
         parser=args.parser,
