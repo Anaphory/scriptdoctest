@@ -269,7 +269,8 @@ class ScriptDocTestParser(doctest.DocTestParser):
 # 4. EllipsisOutputChecker
 ######################################################################
 
-ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+
 
 class EllipsisOutputChecker(doctest.OutputChecker):
     """A class for comparing real and expected output.
@@ -414,15 +415,12 @@ class EllipsisOutputChecker(doctest.OutputChecker):
 
         # In addition, we normalize the unicode form, and if there are carriage
         # returns on a line, we assume they indeed reset the line.
-        got = ansi_escape.sub('', got)
+        got = ansi_escape.sub("", got)
         got = unicodedata.normalize("NFC", got)
         got = got.replace("\t", "    ")
-        got = '\n'.join(
-            line.rsplit("\r", 1)[-1]
-            for line in got.split("\n")
-            )
+        got = "\n".join(line.rsplit("\r", 1)[-1] for line in got.split("\n"))
 
-        want = ansi_escape.sub('', want)
+        want = ansi_escape.sub("", want)
         want = unicodedata.normalize("NFC", want)
         want = want.replace("\t", "    ")
 
@@ -614,7 +612,7 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
 
         check = self._checker.check_output
 
-        testenvironment = scripttest.TestFileEnvironment(base_path = self.directory)
+        testenvironment = scripttest.TestFileEnvironment(base_path=self.directory)
 
         # Process each example.
         for examplenum, example in enumerate(test.examples):
@@ -688,10 +686,15 @@ class ScriptDocTestRunner(doctest.DocTestRunner):
                 data_file = os.path.abspath("./.coverage")
                 coverage_file = os.path.abspath("./.coveragerc")
                 with open(coverage_file, "w") as coveragerc:
-                    coveragerc.write(f"""[run]
+                    coveragerc.write(
+                        f"""[run]
 branch=True
-data_file={data_file:}""")
-                example.source = example.source.replace("python -m", f"coverage run -a --source lexedata --rcfile={coverage_file} -m")
+data_file={data_file:}"""
+                    )
+                example.source = example.source.replace(
+                    "python -m",
+                    f"coverage run -a --source lexedata --rcfile={coverage_file} -m",
+                )
 
             if not by_python_pseudoshell:
                 # Don't blink!  This is where the user's code gets run.
@@ -855,7 +858,7 @@ def testfile(
     raise_on_error=False,
     parser=ScriptDocTestParser(),
     encoding=None,
-        base_path = None,
+    base_path=None,
 ):
     """
     Test examples in the given file.  Return (#failures, #tests).
@@ -960,7 +963,9 @@ def testfile(
     if "__name__" not in globs:
         globs["__name__"] = "__main__"
 
-    runner = ScriptDocTestRunner(verbose=verbose, optionflags=optionflags, base_path=base_path)
+    runner = ScriptDocTestRunner(
+        verbose=verbose, optionflags=optionflags, base_path=base_path
+    )
 
     # Read the file, convert it to a test, and run it.
     test = parser.get_doctest(text, globs, name, filename, 0)
@@ -989,9 +994,18 @@ if __name__ == "__main__":
     parser.add_argument("--globs", default=None)
     parser.add_argument("--verbose", default=None)
     parser.add_argument("--report", action="store_false", default=True)
-    parser.add_argument('-o', '--option', action='append',
-                        choices=[f"+{o}" for o in OPTIONFLAGS_BY_NAME]+[f"-{o}" for o in OPTIONFLAGS_BY_NAME], default=["+ELLIPSIS", "+PSEUDOSHELL"],
-                        help=('specify a doctest option flag to apply to the test run; may be specified more than once to apply multiple options. (default: +ELLIPSIS +PSEUDOSHELL)'))
+    parser.add_argument(
+        "-o",
+        "--option",
+        action="append",
+        choices=list(OPTIONFLAGS_BY_NAME)
+        + [f"+{o}" for o in OPTIONFLAGS_BY_NAME]
+        + [f"-{o}" for o in OPTIONFLAGS_BY_NAME],
+        default=["+ELLIPSIS", "+PSEUDOSHELL"],
+        help=(
+            "specify a doctest option flag to apply to the test run; may be specified more than once to apply multiple options. (default: +ELLIPSIS +PSEUDOSHELL)"
+        ),
+    )
 
     parser.add_argument("--extraglobs", default=None)
     parser.add_argument("--raise_on_error", action="store_true", default=False)
